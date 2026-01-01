@@ -1,4 +1,3 @@
-
 import { TradeSignal, WatchlistItem, User, TradeStatus, LogEntry, ChatMessage } from '../types';
 
 const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwvKlkhm4P2wj0t5ePFGEVzCFOhL6k96qC4dc0OAId1NLCUl_sphIo6fupHOX3d6Coz/exec';
@@ -77,9 +76,6 @@ const parseSignalRow = (s: any, index: number, tabName: string): TradeSignal | n
     parsedTargets = rawTargets.map(t => parseFloat(t)).filter(n => !isNaN(n));
   }
 
-  // STABLE ID GENERATION: 
-  // We MUST NOT use Date.now() if ID is missing, otherwise every poll treats it as new.
-  // We use row data to create a deterministic hash if ID column is empty.
   const rawId = getVal(s, 'id');
   const id = rawId ? String(rawId).trim() : 
     `sig-${instrument}-${symbol}-${entryPrice}-${getVal(s, 'timestamp') || index}`.replace(/\s+/g, '-');
@@ -94,6 +90,9 @@ const parseSignalRow = (s: any, index: number, tabName: string): TradeSignal | n
     targets: parsedTargets,
     targetsHit: getNum(s, 'targetsHit') || 0, 
     trailingSL: getNum(s, 'trailingSL') ?? null,
+    pnlPoints: getNum(s, 'pnlPoints'),
+    pnlRupees: getNum(s, 'pnlRupees'),
+    cmp: getNum(s, 'cmp'), // Explicitly parse CMP
     action: (getVal(s, 'action') || 'BUY') as 'BUY' | 'SELL',
     status: normalizeStatus(getVal(s, 'status')),
     timestamp: getVal(s, 'timestamp') || new Date().toISOString(),
@@ -113,7 +112,7 @@ export const fetchSheetData = async (retries = 2): Promise<SheetData | null> => 
     return { 
       signals: (data.signals || [])
         .map((s: any, i: number) => ({ ...parseSignalRow(s, i, 'SIG'), sheetIndex: i }))
-        .filter((s: any) => s.id !== undefined) as (TradeSignal & { sheetIndex: number })[],
+        .filter((s: any) => s !== null && s.id !== undefined) as (TradeSignal & { sheetIndex: number })[],
       history: (data.history || [])
         .map((s: any, i: number) => parseSignalRow(s, i, 'HIST'))
         .filter((s: any) => s !== null) as TradeSignal[],

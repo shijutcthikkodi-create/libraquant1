@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
@@ -14,7 +13,7 @@ import { Radio, CheckCircle, BarChart2, ShieldAlert, Volume2, VolumeX, RefreshCw
 const SESSION_DURATION_MS = 8 * 60 * 60 * 1000; 
 const SESSION_KEY = 'libra_user_session';
 const POLL_INTERVAL = 8000; 
-const MAJOR_ALERT_DURATION = 15000; // STRICT 15s Alert window
+const MAJOR_ALERT_DURATION = 15000; 
 
 export type GranularHighlights = Record<string, Set<string>>;
 
@@ -120,48 +119,31 @@ const App: React.FC = () => {
 
   const playLongBeep = useCallback((isCritical = false, isBTST = false) => {
     if (!soundEnabled || !audioInitialized) return;
-    
     stopAlertAudio();
-
     try {
       const ctx = audioCtxRef.current;
       if (!ctx) return;
       if (ctx.state === 'suspended') ctx.resume();
-
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      
       const baseFreq = isBTST ? 980 : (isCritical ? 440 : 880);
       osc.type = (isBTST || isCritical) ? 'square' : 'sine';
       osc.frequency.setValueAtTime(baseFreq, ctx.currentTime);
-      
-      // Pattern: Two Long Beeps 
-      // Beep 1 : 0.0s to 2.0s
-      // Silence: 2.0s to 5.0s
-      // Beep 2 : 5.0s to 7.0s
-      // Final silence: 7.0s to 15.0s
       const now = ctx.currentTime;
-      
-      // First Beep: 0s to 2.0s
       gain.gain.setValueAtTime(0, now);
       gain.gain.linearRampToValueAtTime(0.15, now + 0.1); 
       gain.gain.setValueAtTime(0.15, now + 1.9);
       gain.gain.linearRampToValueAtTime(0, now + 2.0); 
-      
-      // Second Beep: 5.0s to 7.0s
       const secondStart = now + 5.0;
       gain.gain.setValueAtTime(0, secondStart);
       gain.gain.linearRampToValueAtTime(0.15, secondStart + 0.1); 
       gain.gain.setValueAtTime(0.15, secondStart + 1.9);
       gain.gain.linearRampToValueAtTime(0, secondStart + 2.0); 
-
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start();
-      
       activeOscillatorRef.current = osc;
       activeGainRef.current = gain;
-
       alertTimeoutRef.current = setTimeout(() => stopAlertAudio(), MAJOR_ALERT_DURATION);
     } catch (e) {
       console.error("Audio Playback Failed", e);
@@ -207,10 +189,25 @@ const App: React.FC = () => {
                   }
                 } else {
                   ALL_SIGNAL_KEYS.forEach(k => {
-                    if (JSON.stringify(s[k]) !== JSON.stringify(old[k])) {
+                    const newVal = s[k];
+                    const oldVal = old[k];
+                    if (JSON.stringify(newVal) !== JSON.stringify(oldVal)) {
                       diff.add(k);
                       if (ALERT_TRIGGER_KEYS.includes(k)) {
                          majorUpdateFound = anyChangeDetected = true;
+                         
+                         // DETECTION FOR SHOCKWAVE BLAST (Based on targetsHit OR comment: 1, 2, 3)
+                         const tHitNew = Number(s.targetsHit || 0);
+                         const tHitOld = Number(old.targetsHit || 0);
+                         const commentNew = String(s.comment || '').trim();
+                         const commentOld = String(old.comment || '').trim();
+                         // Trigger blast if numeric column increases OR comment specifically matches "1", "2", "3" and changed
+                         const isNewTargetComment = ['1', '2', '3'].includes(commentNew) && commentNew !== commentOld;
+                         
+                         if (tHitNew > tHitOld || isNewTargetComment) {
+                           diff.add('blast');
+                         }
+                         
                          if (k === 'status' && s.status === TradeStatus.STOPPED) isCriticalAlert = true;
                       }
                     }
@@ -270,43 +267,26 @@ const App: React.FC = () => {
   useEffect(() => {
     const timer = setInterval(() => {
       const now = Date.now();
-      
       setActiveMajorAlerts(prev => {
         const next = { ...prev };
         let majorChanged = false;
-        
-        Object.keys(next).forEach(key => {
-          if (now >= next[key]) {
-            delete next[key];
-            majorChanged = true;
-          }
-        });
-
+        Object.keys(next).forEach(key => { if (now >= next[key]) { delete next[key]; majorChanged = true; } });
         if (majorChanged) {
           setGranularHighlights(prevHighs => {
             const nextHighs = { ...prevHighs };
-            Object.keys(prev).forEach(key => {
-              if (now >= prev[key]) delete nextHighs[key];
-            });
+            Object.keys(prev).forEach(key => { if (now >= prev[key]) delete nextHighs[key]; });
             return nextHighs;
           });
           return next;
         }
         return prev;
       });
-
       setActiveWatchlistAlerts(prev => {
         const next = { ...prev };
         let changed = false;
-        Object.keys(next).forEach(key => {
-          if (now >= next[key]) {
-            delete next[key];
-            changed = true;
-          }
-        });
+        Object.keys(next).forEach(key => { if (now >= next[key]) { delete next[key]; changed = true; } });
         return changed ? next : prev;
       });
-
     }, 1000);
     return () => clearInterval(timer);
   }, []);
@@ -314,10 +294,8 @@ const App: React.FC = () => {
   useEffect(() => {
     sync(true);
     const poll = setInterval(() => sync(false), POLL_INTERVAL);
-    
     const handleVisibility = () => { if (!document.hidden) sync(false); };
     document.addEventListener('visibilitychange', handleVisibility);
-    
     return () => {
       clearInterval(poll);
       document.removeEventListener('visibilitychange', handleVisibility);
@@ -340,7 +318,6 @@ const App: React.FC = () => {
 
   return (
     <Layout user={user} onLogout={() => { localStorage.removeItem(SESSION_KEY); setUser(null); }} currentPage={page} onNavigate={setPage}>
-      
       {user && !audioInitialized && (
         <div className="fixed inset-0 z-[200] bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-500">
           <div className="w-20 h-20 bg-blue-600 rounded-full flex items-center justify-center text-white mb-6 animate-pulse shadow-[0_0_40px_rgba(37,99,235,0.4)]">
@@ -348,15 +325,9 @@ const App: React.FC = () => {
           </div>
           <h2 className="text-2xl font-black text-white mb-2 uppercase tracking-tighter">Initialize Terminal</h2>
           <p className="text-slate-400 text-sm mb-8 max-w-xs">Tap below to activate real-time institutional alerts and secure audio stream.</p>
-          <button 
-            onClick={initAudio} 
-            className="w-full max-w-xs bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl shadow-xl shadow-blue-900/40 uppercase tracking-[0.2em] text-xs transition-all active:scale-95"
-          >
-            Activate Live Feed
-          </button>
+          <button onClick={initAudio} className="w-full max-w-xs bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl shadow-xl shadow-blue-900/40 uppercase tracking-[0.2em] text-xs transition-all active:scale-95">Activate Live Feed</button>
         </div>
       )}
-
       <div className="fixed top-4 right-4 z-[100] flex flex-col items-end space-y-3">
         <div className={`bg-slate-900/95 backdrop-blur-md px-3 py-2 rounded-xl text-[10px] font-bold border shadow-2xl flex items-center ${connectionStatus === 'error' ? 'border-rose-500 bg-rose-950/20' : 'border-slate-800'}`}>
           <div className="flex flex-col items-start mr-3">
@@ -372,13 +343,11 @@ const App: React.FC = () => {
           {soundEnabled ? <Volume2 size={32} /> : <VolumeX size={32} />}
         </button>
       </div>
-
       {page === 'dashboard' && <Dashboard watchlist={watchlist} signals={signals} user={user} granularHighlights={granularHighlights} activeMajorAlerts={activeMajorAlerts} activeWatchlistAlerts={activeWatchlistAlerts} onSignalUpdate={sync} />}
       {page === 'booked' && <BookedTrades signals={signals} historySignals={historySignals} user={user} granularHighlights={granularHighlights} onSignalUpdate={sync} />}
       {page === 'stats' && <Stats signals={signals} historySignals={historySignals} />}
       {page === 'rules' && <Rules />}
       {user?.isAdmin && page === 'admin' && <Admin watchlist={watchlist} onUpdateWatchlist={() => {}} signals={signals} onUpdateSignals={() => {}} users={users} onUpdateUsers={() => {}} logs={logs} onNavigate={setPage} onHardSync={() => sync(true)} />}
-
       <div className="md:hidden fixed bottom-4 left-4 right-4 z-[100] bg-slate-900/90 backdrop-blur-xl border border-slate-800 px-6 py-4 flex justify-around items-center rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
         <button onClick={() => setPage('dashboard')} className={`flex flex-col items-center space-y-1 transition-all ${page === 'dashboard' ? 'text-blue-500' : 'text-slate-500'}`}>
           <Radio size={24} strokeWidth={page === 'dashboard' ? 3 : 2} />

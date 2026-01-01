@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
@@ -8,12 +9,12 @@ import Admin from './pages/Admin';
 import BookedTrades from './pages/BookedTrades';
 import { User, WatchlistItem, TradeSignal, TradeStatus, LogEntry, ChatMessage } from './types';
 import { fetchSheetData, updateSheetData } from './services/googleSheetsService';
-import { Radio, CheckCircle, BarChart2, ShieldAlert, Volume2, VolumeX, RefreshCw, WifiOff, Database, Zap } from 'lucide-react';
+import { Radio, CheckCircle, BarChart2, Volume2, VolumeX, Database, Zap, BookOpen } from 'lucide-react';
 
 const SESSION_DURATION_MS = 8 * 60 * 60 * 1000; 
 const SESSION_KEY = 'libra_user_session';
 const POLL_INTERVAL = 8000; 
-const MAJOR_ALERT_DURATION = 15000; 
+const MAJOR_ALERT_DURATION = 5000; 
 
 export type GranularHighlights = Record<string, Set<string>>;
 
@@ -58,6 +59,7 @@ const App: React.FC = () => {
   
   const prevSignalsRef = useRef<TradeSignal[]>([]);
   const prevWatchlistRef = useRef<WatchlistItem[]>([]);
+  const prevMessagesRef = useRef<ChatMessage[]>([]);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const activeOscillatorRef = useRef<OscillatorNode | null>(null);
   const activeGainRef = useRef<GainNode | null>(null);
@@ -117,6 +119,33 @@ const App: React.FC = () => {
     }
   }, []);
 
+  const playUpdateBlip = useCallback(() => {
+    if (!soundEnabled || !audioInitialized) return;
+    try {
+      const ctx = audioCtxRef.current;
+      if (!ctx) return;
+      if (ctx.state === 'suspended') ctx.resume();
+      
+      const playTone = (freq: number, start: number, dur: number) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+        gain.gain.setValueAtTime(0, ctx.currentTime + start);
+        gain.gain.linearRampToValueAtTime(0.4, ctx.currentTime + start + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + start + dur);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(ctx.currentTime + start);
+        osc.stop(ctx.currentTime + start + dur + 0.05);
+      };
+
+      // Distinct institutional ping sequence
+      playTone(2200, 0, 0.08);
+      playTone(1800, 0.06, 0.12);
+    } catch (e) {}
+  }, [soundEnabled, audioInitialized]);
+
   const playLongBeep = useCallback((isCritical = false, isBTST = false) => {
     if (!soundEnabled || !audioInitialized) return;
     stopAlertAudio();
@@ -160,7 +189,9 @@ const App: React.FC = () => {
       
       const data = await fetchSheetData();
       if (data) {
-        let anyChangeDetected = false;
+        let signalChangeDetected = false;
+        let watchChangeDetected = false;
+        let intelChangeDetected = false;
         let isCriticalAlert = false;
         let isBTSTUpdate = false;
         let targetSid: string | null = null;
@@ -185,7 +216,7 @@ const App: React.FC = () => {
                 if (!old) {
                   if (!isInitial && prevSignalsRef.current.length > 0) {
                     ALL_SIGNAL_KEYS.forEach(k => diff.add(k));
-                    majorUpdateFound = anyChangeDetected = true;
+                    majorUpdateFound = signalChangeDetected = true;
                   }
                 } else {
                   ALL_SIGNAL_KEYS.forEach(k => {
@@ -194,21 +225,10 @@ const App: React.FC = () => {
                     if (JSON.stringify(newVal) !== JSON.stringify(oldVal)) {
                       diff.add(k);
                       if (ALERT_TRIGGER_KEYS.includes(k)) {
-                         majorUpdateFound = anyChangeDetected = true;
-                         
-                         // DETECTION FOR SHOCKWAVE BLAST (Based on targetsHit OR comment: 1, 2, 3)
-                         const tHitNew = Number(s.targetsHit || 0);
-                         const tHitOld = Number(old.targetsHit || 0);
-                         const commentNew = String(s.comment || '').trim();
-                         const commentOld = String(old.comment || '').trim();
-                         // Trigger blast if numeric column increases OR comment specifically matches "1", "2", "3" and changed
-                         const isNewTargetComment = ['1', '2', '3'].includes(commentNew) && commentNew !== commentOld;
-                         
-                         if (tHitNew > tHitOld || isNewTargetComment) {
-                           diff.add('blast');
+                         majorUpdateFound = signalChangeDetected = true;
+                         if (k === 'status' && (s.status === TradeStatus.STOPPED || s.status === TradeStatus.EXITED || s.status === TradeStatus.ALL_TARGET)) {
+                            isCriticalAlert = true;
                          }
-                         
-                         if (k === 'status' && s.status === TradeStatus.STOPPED) isCriticalAlert = true;
                       }
                     }
                   });
@@ -228,8 +248,11 @@ const App: React.FC = () => {
 
               data.watchlist.forEach(w => {
                 const old = prevWatchlistRef.current.find(o => o.symbol === w.symbol);
-                if (old && !isInitial && Number(w.price) !== Number(old.price)) {
-                  anyChangeDetected = true;
+                const isNew = !old && prevWatchlistRef.current.length > 0;
+                const isPriceChanged = old && Number(w.price) !== Number(old.price);
+
+                if (!isInitial && (isNew || isPriceChanged)) {
+                  watchChangeDetected = true;
                   nextWatch[w.symbol] = expirationTime;
                 }
               });
@@ -241,14 +264,29 @@ const App: React.FC = () => {
           return nextMajor;
         });
 
-        if (anyChangeDetected && !isInitial) {
-          playLongBeep(isCriticalAlert, isBTSTUpdate);
-          if (targetSid) handleRedirectToCard(targetSid);
+        // Detect new Admin Broadcasts (Intelligence)
+        if (!isInitial && data.messages.length > 0) {
+          const latestAdminMsg = data.messages.filter(m => m.isAdminReply).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+          const prevAdminMsg = prevMessagesRef.current.filter(m => m.isAdminReply).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+          
+          if (latestAdminMsg && (!prevAdminMsg || latestAdminMsg.id !== prevAdminMsg.id)) {
+            intelChangeDetected = true;
+          }
+        }
+
+        if (!isInitial) {
+           if (signalChangeDetected) {
+             playLongBeep(isCriticalAlert, isBTSTUpdate);
+             if (targetSid) handleRedirectToCard(targetSid);
+           } else if (watchChangeDetected || intelChangeDetected) {
+             playUpdateBlip();
+           }
         }
 
         setLastSyncTime(new Date().toLocaleTimeString('en-IN'));
         prevSignalsRef.current = [...data.signals];
         prevWatchlistRef.current = [...data.watchlist];
+        prevMessagesRef.current = [...data.messages];
         setSignals([...data.signals]);
         setHistorySignals([...(data.history || [])]);
         setWatchlist([...data.watchlist]);
@@ -262,7 +300,7 @@ const App: React.FC = () => {
     } finally {
       isFetchingRef.current = false;
     }
-  }, [playLongBeep, handleRedirectToCard]);
+  }, [playLongBeep, playUpdateBlip, handleRedirectToCard]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -317,7 +355,14 @@ const App: React.FC = () => {
   }} />;
 
   return (
-    <Layout user={user} onLogout={() => { localStorage.removeItem(SESSION_KEY); setUser(null); }} currentPage={page} onNavigate={setPage}>
+    <Layout 
+      user={user} 
+      onLogout={() => { localStorage.removeItem(SESSION_KEY); setUser(null); }} 
+      currentPage={page} 
+      onNavigate={setPage}
+      watchlist={watchlist}
+      activeWatchlistAlerts={activeWatchlistAlerts}
+    >
       {user && !audioInitialized && (
         <div className="fixed inset-0 z-[200] bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-500">
           <div className="w-20 h-20 bg-blue-600 rounded-full flex items-center justify-center text-white mb-6 animate-pulse shadow-[0_0_40px_rgba(37,99,235,0.4)]">
@@ -343,23 +388,27 @@ const App: React.FC = () => {
           {soundEnabled ? <Volume2 size={32} /> : <VolumeX size={32} />}
         </button>
       </div>
-      {page === 'dashboard' && <Dashboard watchlist={watchlist} signals={signals} user={user} granularHighlights={granularHighlights} activeMajorAlerts={activeMajorAlerts} activeWatchlistAlerts={activeWatchlistAlerts} onSignalUpdate={sync} />}
+      {page === 'dashboard' && <Dashboard watchlist={watchlist} signals={signals} messages={messages} user={user} granularHighlights={granularHighlights} activeMajorAlerts={activeMajorAlerts} activeWatchlistAlerts={activeWatchlistAlerts} onSignalUpdate={sync} />}
       {page === 'booked' && <BookedTrades signals={signals} historySignals={historySignals} user={user} granularHighlights={granularHighlights} onSignalUpdate={sync} />}
       {page === 'stats' && <Stats signals={signals} historySignals={historySignals} />}
       {page === 'rules' && <Rules />}
-      {user?.isAdmin && page === 'admin' && <Admin watchlist={watchlist} onUpdateWatchlist={() => {}} signals={signals} onUpdateSignals={() => {}} users={users} onUpdateUsers={() => {}} logs={logs} onNavigate={setPage} onHardSync={() => sync(true)} />}
+      {user?.isAdmin && page === 'admin' && <Admin watchlist={watchlist} onUpdateWatchlist={() => {}} signals={signals} onUpdateSignals={() => {}} users={users} onUpdateUsers={() => {}} logs={logs} messages={messages} onNavigate={setPage} onHardSync={() => sync(true)} />}
       <div className="md:hidden fixed bottom-4 left-4 right-4 z-[100] bg-slate-900/90 backdrop-blur-xl border border-slate-800 px-6 py-4 flex justify-around items-center rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
         <button onClick={() => setPage('dashboard')} className={`flex flex-col items-center space-y-1 transition-all ${page === 'dashboard' ? 'text-blue-500' : 'text-slate-500'}`}>
           <Radio size={24} strokeWidth={page === 'dashboard' ? 3 : 2} />
-          <span className="text-[10px] font-bold uppercase tracking-tighter">Live</span>
+          <span className="text-[10px] font-bold uppercase tracking-tighter text-center">Live</span>
         </button>
         <button onClick={() => setPage('booked')} className={`flex flex-col items-center space-y-1 transition-all ${page === 'booked' ? 'text-emerald-500' : 'text-slate-500'}`}>
           <CheckCircle size={24} strokeWidth={page === 'booked' ? 3 : 2} />
-          <span className="text-[10px] font-bold uppercase tracking-tighter">Booked</span>
+          <span className="text-[10px] font-bold uppercase tracking-tighter text-center">Booked</span>
         </button>
         <button onClick={() => setPage('stats')} className={`flex flex-col items-center space-y-1 transition-all ${page === 'stats' ? 'text-yellow-500' : 'text-slate-500'}`}>
           <BarChart2 size={24} strokeWidth={page === 'stats' ? 3 : 2} />
-          <span className="text-[10px] font-bold uppercase tracking-tighter">Stats</span>
+          <span className="text-[10px] font-bold uppercase tracking-tighter text-center">Stats</span>
+        </button>
+        <button onClick={() => setPage('rules')} className={`flex flex-col items-center space-y-1 transition-all ${page === 'rules' ? 'text-purple-500' : 'text-slate-500'}`}>
+          <BookOpen size={24} strokeWidth={page === 'rules' ? 3 : 2} />
+          <span className="text-[10px] font-bold uppercase tracking-tighter text-center">Rules</span>
         </button>
       </div>
     </Layout>

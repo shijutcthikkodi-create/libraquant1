@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { ArrowUpRight, ArrowDownRight, Target, Cpu, Edit2, Check, X, TrendingUp, TrendingDown, Clock, ShieldAlert, Zap, AlertTriangle, Trophy, Loader2, History, Briefcase, Activity, Moon, Trash2 } from 'lucide-react';
 import { TradeSignal, TradeStatus, OptionType, User } from '../types';
@@ -124,7 +125,7 @@ const SignalCard: React.FC<SignalCardProps> = ({ signal, user, highlights, isMaj
         isBTST ? 'border-amber-500/30 shadow-[0_0_15px_rgba(245,158,11,0.05)]' : 'border-slate-800 opacity-90'} 
       ${isRecentlyClosed ? 'opacity-30 grayscale-[0.8]' : ''}
       ${isBTST ? 'bg-gradient-to-br from-slate-900 to-amber-950/15' : ''}
-      ${isMajorAlerting ? 'animate-card-pulse' : ''}
+      ${isMajorAlerting ? 'animate-card-pulse border-blue-500 shadow-[0_0_30px_rgba(59,130,246,0.2)]' : ''}
     `}>
       
       {/* INSTITUTIONAL SHOCKWAVE BLAST */}
@@ -159,7 +160,7 @@ const SignalCard: React.FC<SignalCardProps> = ({ signal, user, highlights, isMaj
         </div>
       )}
 
-      <div className={`flex justify-between items-start p-5 pb-3 ${highlights?.has('instrument') || highlights?.has('symbol') || highlights?.has('type') || highlights?.has('action') ? 'animate-box-blink' : ''}`}>
+      <div className={`flex justify-between items-start p-5 pb-3 ${highlights?.has('instrument') || highlights?.has('symbol') || highlights?.has('type') || highlights?.has('action') || highlights?.has('status') ? 'animate-box-blink' : ''}`}>
         <div className="flex items-center space-x-3">
           <div className={`p-2 rounded-lg ${isBuy ? 'bg-emerald-900/30 text-emerald-400' : 'bg-rose-900/30 text-rose-400'}`}>
             {isBuy ? <ArrowUpRight size={24} /> : <ArrowDownRight size={24} />}
@@ -195,7 +196,7 @@ const SignalCard: React.FC<SignalCardProps> = ({ signal, user, highlights, isMaj
                   <Trash2 size={12} />
                 </button>
               )}
-              <div className={`px-3 py-1 rounded text-[10px] font-bold border ${getStatusColor(signal.status)} flex items-center ${highlights?.has('status') ? 'animate-box-blink' : ''}`}>
+              <div className={`px-3 py-1 rounded text-[10px] font-bold border ${getStatusColor(signal.status)} flex items-center ${highlights?.has('status') ? 'animate-box-blink ring-2 ring-current' : ''}`}>
                   {isAllTarget ? <Trophy size={10} className="mr-2" /> : <span className={`w-1.5 h-1.5 rounded-full mr-2 ${isActive ? 'bg-current animate-pulse' : 'bg-current opacity-50'}`}></span>}
                   {signal.status}
               </div>
@@ -218,12 +219,12 @@ const SignalCard: React.FC<SignalCardProps> = ({ signal, user, highlights, isMaj
             ) : null}
         </div>
         
-        <div className={`p-4 flex flex-col transition-colors duration-500 ${isSLHit ? 'bg-rose-950/20' : 'bg-slate-900'} ${highlights?.has('stopLoss') || highlights?.has('trailingSL') ? 'animate-box-blink' : ''}`}>
+        <div className={`p-4 flex flex-col transition-colors duration-500 ${isSLHit ? 'bg-rose-950/20' : 'bg-slate-900'} ${highlights?.has('stopLoss') ? 'animate-box-blink' : ''}`}>
             <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Stop Loss</p>
             <p className={`text-xl font-mono font-bold mb-3 ${isSLHit ? 'text-rose-500 animate-pulse' : 'text-rose-400'}`}>
               ₹{Number(signal.stopLoss || 0).toFixed(2)}
             </p>
-            <div className={`mt-auto pt-2 border-t border-slate-800/80`}>
+            <div className={`mt-auto pt-2 border-t border-slate-800/80 ${highlights?.has('trailingSL') ? 'animate-box-blink bg-blue-500/10' : ''}`}>
                 {isEditingTrail ? (
                     <div className="flex items-center space-x-1">
                         <input type="number" value={trailValue} onChange={(e) => setTrailValue(e.target.value)} className="w-full bg-slate-950 border border-blue-500/50 rounded text-[10px] px-2 py-1 text-white focus:outline-none font-mono" autoFocus disabled={isSavingTrail} />

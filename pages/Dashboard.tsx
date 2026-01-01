@@ -1,30 +1,48 @@
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import SignalCard from '../components/SignalCard';
-import { Bell, List, Clock, Zap, Activity, ExternalLink, TrendingUp, Moon, ShieldAlert, Loader2, ShieldCheck, ArrowRight, Send, Timer } from 'lucide-react';
-import { WatchlistItem, TradeSignal, User, TradeStatus } from '../types';
+import { Clock, Zap, Activity, ShieldCheck, Send, Timer, ArrowRight, List, TrendingUp, TrendingDown, Target, MessageSquareCode, Radio as RadioIcon, Loader2, CheckCircle2, ChevronDown, ChevronUp, Bell, BellRing, X } from 'lucide-react';
+import { WatchlistItem, TradeSignal, User, TradeStatus, ChatMessage } from '../types';
 import { GranularHighlights } from '../App';
 
 interface DashboardProps {
   watchlist: WatchlistItem[];
   signals: (TradeSignal & { sheetIndex?: number })[];
+  messages: ChatMessage[];
   user: User;
   granularHighlights: GranularHighlights;
   activeMajorAlerts: Record<string, number>;
-  activeWatchlistAlerts: Record<string, number>;
+  activeWatchlistAlerts?: Record<string, number>;
+  intelAlertActive?: boolean;
   onSignalUpdate: (updated: TradeSignal) => Promise<boolean>;
+  onSendMessage?: (text: string) => Promise<boolean>;
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ 
-  watchlist, 
+  watchlist = [],
   signals, 
+  messages = [],
   user, 
   granularHighlights,
   activeMajorAlerts,
-  activeWatchlistAlerts,
-  onSignalUpdate
+  activeWatchlistAlerts = {},
+  intelAlertActive = false,
+  onSignalUpdate,
+  onSendMessage
 }) => {
+  const [hotlineText, setHotlineText] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [isIntelManuallyOpen, setIsIntelManuallyOpen] = useState(false);
+
   const GRACE_PERIOD_MS = 60 * 1000;
+
+  // Auto-manage intel expansion
+  useEffect(() => {
+    if (intelAlertActive) {
+      setIsIntelManuallyOpen(false); // Let the auto-state take over
+    }
+  }, [intelAlertActive]);
 
   const parseFlexibleDate = (dateStr: string | undefined): Date | null => {
     if (!dateStr) return null;
@@ -50,9 +68,16 @@ const Dashboard: React.FC<DashboardProps> = ({
     return targetStr === fmt(yesterday);
   };
 
-  const lastGivenTrade = useMemo(() => {
-    if (!signals || signals.length === 0) return null;
-    return [...signals].sort((a, b) => (b.sheetIndex ?? 0) - (a.sheetIndex ?? 0))[0];
+  const latestAdminIntel = useMemo(() => {
+    return messages
+      .filter(m => m.isAdminReply)
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+  }, [messages]);
+
+  const lastUpdatedSignal = useMemo(() => {
+    return [...signals]
+      .filter(s => s.lastTradedTimestamp)
+      .sort((a, b) => new Date(b.lastTradedTimestamp!).getTime() - new Date(a.lastTradedTimestamp!).getTime())[0];
   }, [signals]);
 
   const liveSignals = useMemo(() => {
@@ -68,26 +93,19 @@ const Dashboard: React.FC<DashboardProps> = ({
   }, [signals]);
 
   const sortedSignals = useMemo(() => {
-    return [...liveSignals].sort((a, b) => {
-      const activityA = Math.max(parseFlexibleDate(a.timestamp)?.getTime() || 0, parseFlexibleDate(a.lastTradedTimestamp)?.getTime() || 0);
-      const activityB = Math.max(parseFlexibleDate(b.timestamp)?.getTime() || 0, parseFlexibleDate(b.lastTradedTimestamp)?.getTime() || 0);
-      if (activityA !== activityB) return activityB - activityA;
-      return (b.sheetIndex ?? 0) - (a.sheetIndex ?? 0);
-    });
+    return [...liveSignals].sort((a, b) => (b.sheetIndex ?? 0) - (a.sheetIndex ?? 0));
   }, [liveSignals]);
 
-  const scrollToSignal = (id: string) => {
-      const el = document.getElementById(`signal-${id}`);
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  };
-
-  const timeSince = (timestamp: string) => {
-    const tradeDate = parseFlexibleDate(timestamp);
-    if (!tradeDate) return "LIVE";
-    const seconds = Math.floor((new Date().getTime() - tradeDate.getTime()) / 1000);
-    if (seconds < 60) return "JUST NOW";
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}M AGO`;
-    return `${Math.floor(seconds / 3600)}H AGO`;
+  const handleHotlineSend = async () => {
+    if (!hotlineText.trim() || !onSendMessage) return;
+    setIsSending(true);
+    const success = await onSendMessage(hotlineText);
+    if (success) {
+      setHotlineText('');
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
+    }
+    setIsSending(false);
   };
 
   return (
@@ -103,129 +121,239 @@ const Dashboard: React.FC<DashboardProps> = ({
         <div className="mt-4 md:mt-0 flex flex-wrap items-center gap-3">
             <div className="flex items-center px-3 py-1 bg-slate-900 border border-slate-800 rounded-full text-[10px] font-bold text-slate-500">
               <Clock size={12} className="mr-1.5 text-blue-500" />
-              IST Today: {new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
-            </div>
-            <div className="flex items-center px-4 py-2 bg-slate-900/50 border border-emerald-500/20 text-emerald-500 rounded-lg transition-all text-[10px] font-black uppercase tracking-widest">
-                <ShieldCheck size={14} className="mr-2" /> Verified Partner
+              IST: {new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
             </div>
         </div>
       </div>
 
-      {lastGivenTrade && (
-        <div 
-          onClick={() => scrollToSignal(lastGivenTrade.id)}
-          className={`relative group cursor-pointer overflow-hidden rounded-2xl border bg-gradient-to-r from-slate-900 via-blue-900/40 to-slate-900 shadow-2xl transition-all duration-700 ${activeMajorAlerts[lastGivenTrade.id] ? 'border-blue-500 scale-[1.01]' : 'border-slate-800'}`}
-        >
-          <div className="flex items-center p-3 sm:p-5">
-              <div className="flex-shrink-0 mr-5 hidden sm:block">
-                  <div className="w-14 h-14 rounded-2xl bg-blue-600/20 flex items-center justify-center text-blue-400 border border-blue-500/30">
-                      <Send size={28} />
-                  </div>
-              </div>
-              <div className="flex-grow">
-                  <div className="flex items-center space-x-3 mb-1.5">
-                      <span className="px-2.5 py-0.5 rounded bg-amber-500 text-slate-950 text-[10px] font-black uppercase tracking-[0.1em]">
-                        Last Signal Broadcast
-                      </span>
-                      <div className="flex items-center text-[10px] font-mono font-black text-blue-400">
-                          <Timer size={12} className="mr-1.5" />
-                          <span>{timeSince(lastGivenTrade.timestamp)}</span>
-                      </div>
-                  </div>
-                  <div className="flex flex-wrap items-baseline gap-x-4">
-                      <h3 className="text-xl sm:text-2xl font-black text-white tracking-tighter uppercase font-mono">
-                          {lastGivenTrade.instrument} {lastGivenTrade.symbol} {lastGivenTrade.type}
-                      </h3>
-                      <div className="flex items-center text-sm font-black space-x-3">
-                          <span className={`px-3 py-1 rounded-lg border ${lastGivenTrade.action === 'BUY' ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20' : 'text-rose-400 bg-rose-400/10 border-rose-400/20'}`}>
-                              {lastGivenTrade.action} @ ₹{lastGivenTrade.entryPrice}
-                          </span>
-                      </div>
-                  </div>
-              </div>
-              <div className="flex-shrink-0 ml-4">
-                  <div className="p-3 rounded-full bg-slate-800 text-slate-400 group-hover:text-blue-400 group-hover:bg-blue-400/10 transition-all border border-transparent group-hover:border-blue-500/20">
-                      <ArrowRight size={24} />
-                  </div>
-              </div>
-          </div>
-          {activeMajorAlerts[lastGivenTrade.id] && (
-            <div className="absolute bottom-0 left-0 h-[3px] bg-blue-500 w-full animate-in slide-in-from-left duration-1000"></div>
-          )}
-        </div>
-      )}
-
-      <div className="flex flex-col lg:flex-row gap-6">
-          <div className="flex-1 order-2 lg:order-1">
-              <div className="mb-4 flex items-center space-x-2 px-1">
-                 <Zap size={16} className="text-emerald-500" />
-                 <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Market Feed</h3>
-              </div>
-              {sortedSignals.length === 0 ? (
-                  <div className="text-center py-20 bg-slate-900/50 border border-dashed border-slate-800 rounded-3xl">
-                      <Zap size={40} className="mx-auto text-slate-800 mb-4" />
-                      <p className="text-slate-500 font-bold uppercase tracking-widest text-sm italic">Scanning terminal Truth...</p>
-                  </div>
-              ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {sortedSignals.map((signal) => (
-                      <div key={signal.id} id={`signal-${signal.id}`}>
-                        <SignalCard 
-                            signal={signal} 
-                            user={user} 
-                            highlights={granularHighlights[signal.id]} 
-                            isMajorAlerting={!!activeMajorAlerts[signal.id]}
-                            onSignalUpdate={onSignalUpdate}
-                            isRecentlyClosed={signal.status === TradeStatus.EXITED || signal.status === TradeStatus.STOPPED || signal.status === TradeStatus.ALL_TARGET}
-                        />
-                      </div>
-                    ))}
-                  </div>
-              )}
-          </div>
-
-          <div className="w-full lg:w-80 shrink-0 order-1 lg:order-2 space-y-4">
-             <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden sticky top-4 shadow-2xl">
-                <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/50 backdrop-blur">
-                    <div className="flex items-center space-x-2">
-                        <List size={16} className="text-blue-400" />
-                        <h3 className="font-bold text-white text-sm uppercase tracking-widest">Watch List</h3>
-                    </div>
-                    {watchlist.length > 0 && (
-                      <div className="flex items-center space-x-1">
-                        <span className="text-[9px] font-black text-emerald-500 uppercase">Live Feed</span>
-                      </div>
-                    )}
-                </div>
-                <div className="divide-y divide-slate-800">
-                    {watchlist.length > 0 ? watchlist.map((item, idx) => {
-                        const isAlerting = !!activeWatchlistAlerts[item.symbol];
-                        return (
-                          <div key={idx} className={`p-4 flex items-center justify-between transition-all duration-500 relative ${isAlerting ? 'animate-box-glow z-10 scale-[1.02] bg-blue-500/10' : 'hover:bg-slate-800/50'}`}>
-                              <div className="relative z-10">
-                                  <p className="font-bold text-sm text-slate-200">{item.symbol}</p>
-                                  <div className="flex items-center mt-1 text-slate-500">
-                                      <Clock size={10} className="mr-1" />
-                                      <span className="text-[10px] font-mono">{item.lastUpdated || '--'}</span>
-                                  </div>
-                              </div>
-                              <div className="text-right relative z-10">
-                                  <p className={`font-mono text-sm font-black ${isAlerting ? 'text-cyan-400 animate-pulse' : 'text-white'}`}>
-                                    {Number(item.price || 0).toFixed(2)}
-                                  </p>
-                                  <p className={`text-xs font-mono mt-0.5 ${item.isPositive ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}`}>
-                                      {item.isPositive ? '+' : ''}{Number(item.change || 0).toFixed(2)}%
-                                  </p>
-                              </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 space-y-6">
+          
+          {/* Intelligence Broadcast Control Center */}
+          {latestAdminIntel && (
+            <div className="mb-4">
+              {/* STATE 1: INTENSIVE ALERT MODE (Shown only for 10s window) OR STATE 2: MANUALLY OPENED */}
+              {(intelAlertActive || isIntelManuallyOpen) ? (
+                <div 
+                  className={`relative overflow-hidden rounded-2xl border transition-all duration-500 ${intelAlertActive ? 'border-blue-400 animate-card-pulse bg-blue-500/10' : 'border-blue-500/30 bg-gradient-to-br from-blue-900/20 to-slate-950'} p-1`}
+                >
+                   <div className="absolute top-0 right-0 p-3 opacity-10">
+                      <MessageSquareCode size={64} className="text-blue-500" />
+                   </div>
+                   <div className={`relative bg-slate-900/80 rounded-[14px] p-5 ${intelAlertActive ? 'animate-box-glow' : ''}`}>
+                      <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center space-x-2">
+                             <div className={`w-2 h-2 rounded-full ${intelAlertActive ? 'bg-white animate-ping' : 'bg-blue-500 animate-pulse'}`}></div>
+                             <h3 className="text-[10px] font-black text-blue-400 uppercase tracking-[0.2em]">Neural Link: Market Intelligence</h3>
+                             {intelAlertActive && (
+                               <span className="px-1.5 py-0.5 rounded bg-blue-500 text-white text-[8px] font-black uppercase tracking-tighter animate-pulse ml-2">New Broadcast</span>
+                             )}
                           </div>
-                        );
-                    }) : null}
+                          <div className="flex items-center space-x-4">
+                            <span className="text-[9px] font-mono text-slate-600 font-bold uppercase">{new Date(latestAdminIntel.timestamp).toLocaleTimeString()} IST</span>
+                            {/* Close button only if not in active intensity phase */}
+                            {!intelAlertActive && (
+                              <button onClick={() => setIsIntelManuallyOpen(false)} className="p-1 hover:bg-slate-800 rounded text-slate-500"><X size={14}/></button>
+                            )}
+                          </div>
+                      </div>
+                      <div className="border-l-2 border-blue-500/50 pl-4 py-1">
+                         <p className={`text-white text-sm font-bold leading-relaxed tracking-tight italic opacity-95 ${intelAlertActive ? 'scale-[1.01] transition-transform' : ''}`}>
+                            "{latestAdminIntel.text}"
+                         </p>
+                      </div>
+                      <div className="mt-3 flex items-center justify-between">
+                         <div className="flex items-center space-x-2">
+                            <RadioIcon size={10} className="text-blue-500" />
+                            <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Secure Admin Channel</span>
+                         </div>
+                      </div>
+                   </div>
                 </div>
-             </div>
+              ) : (
+                /* STATE 3: BELL MODE (Shown after 10s normalization) */
+                <div className="flex justify-start">
+                  <button 
+                    onClick={() => setIsIntelManuallyOpen(true)}
+                    className="group relative flex items-center justify-center w-12 h-12 bg-slate-900 border border-slate-800 rounded-2xl hover:border-blue-500/50 hover:bg-slate-800 transition-all shadow-xl"
+                  >
+                    <Bell className="text-blue-500 group-hover:animate-ring" size={20} />
+                    <span className="absolute top-3 right-3 w-2 h-2 bg-blue-500 rounded-full animate-pulse border-2 border-slate-950"></span>
+                    <div className="absolute left-14 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900 border border-slate-800 rounded px-2 py-1 pointer-events-none whitespace-nowrap">
+                        <span className="text-[8px] font-black text-white uppercase tracking-widest">Enlarge Intelligence</span>
+                    </div>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Last Updated Trade Banner - Restored & Prominent */}
+          {lastUpdatedSignal && (
+            <div className="relative bg-slate-900/50 border border-slate-800/50 rounded-xl px-4 py-3 flex items-center justify-between mb-4 overflow-hidden group shadow-lg">
+               <div className="absolute inset-y-0 left-0 w-1.5 bg-blue-600"></div>
+               <div className="flex items-center space-x-4">
+                  <div className="flex items-center justify-center w-8 h-8 rounded-xl bg-blue-600/10 border border-blue-500/20">
+                     <Zap size={14} className="text-blue-500 animate-pulse" />
+                  </div>
+                  <div className="flex flex-col">
+                    <div className="flex items-center space-x-2 mb-1">
+                       <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em]">Latest Session Update</span>
+                       <div className="w-1 h-1 rounded-full bg-emerald-500 animate-ping"></div>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                       <span className="text-sm font-black text-white uppercase font-mono tracking-tight">{lastUpdatedSignal.instrument} {lastUpdatedSignal.symbol}</span>
+                       <span className={`text-[9px] font-black px-2 py-0.5 rounded-md ${
+                         lastUpdatedSignal.status === TradeStatus.ACTIVE ? 'bg-emerald-500/10 text-emerald-500' :
+                         lastUpdatedSignal.status === TradeStatus.ALL_TARGET ? 'bg-blue-500/10 text-blue-500' :
+                         'bg-slate-800 text-slate-500'
+                       } uppercase border border-current/10`}>{lastUpdatedSignal.status}</span>
+                    </div>
+                  </div>
+               </div>
+               <div className="text-right">
+                  <span className="text-[10px] font-mono font-black text-slate-400 uppercase tracking-tighter">
+                    SYNC @ {new Date(lastUpdatedSignal.lastTradedTimestamp!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </span>
+                  <div className="flex items-center justify-end text-[7px] font-black text-blue-500 mt-1 uppercase tracking-widest opacity-80">
+                     <ShieldCheck size={9} className="mr-1" /> Institutional Feed Verified
+                  </div>
+               </div>
+            </div>
+          )}
+
+          {/* Market Watch - Updated Font Style */}
+          <div className="relative bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
+            <div className="px-3 py-2 border-b border-slate-800 flex items-center justify-between bg-slate-800/10">
+                 <div className="flex items-center space-x-2">
+                    <Target size={12} className="text-blue-500" />
+                    <h3 className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em]">Real-Time Market Ticker</h3>
+                 </div>
+                 <span className="text-[8px] font-mono font-black text-slate-600 uppercase tracking-tighter">Secure Link</span>
+            </div>
+            <div className="divide-y divide-slate-800/50">
+                {watchlist.map((item, idx) => {
+                    const isAlerting = !!activeWatchlistAlerts[item.symbol];
+                    return (
+                      <div key={idx} className={`flex items-center justify-between px-4 py-2 transition-all duration-200 relative ${isAlerting ? 'animate-box-glow bg-blue-500/10 z-10' : 'hover:bg-slate-800/20'}`}>
+                          <div className="flex items-center space-x-3 min-w-0">
+                              <div className={`w-1 h-1 rounded-full ${item.isPositive ? 'bg-emerald-500' : 'bg-rose-500'} ${isAlerting ? 'animate-ping' : ''}`}></div>
+                              <span className={`text-[10px] font-mono font-bold uppercase tracking-tighter truncate ${isAlerting ? 'text-white' : 'text-slate-300'}`}>{item.symbol}</span>
+                          </div>
+                          <div className="flex items-center space-x-4">
+                              <span className={`text-xs font-mono font-black tracking-tighter ${isAlerting ? 'text-white scale-105 transition-transform' : 'text-slate-100'}`}>
+                                ₹{Number(item.price || 0).toLocaleString('en-IN', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                              </span>
+                              <div className="flex items-center min-w-[45px] justify-end">
+                                {item.isPositive ? <TrendingUp size={10} className="text-emerald-500 mr-1" /> : <TrendingDown size={10} className="text-rose-500 mr-1" />}
+                                <span className={`text-[9px] font-mono font-black ${item.isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                  {Number(item.change || 0).toFixed(1)}%
+                                </span>
+                              </div>
+                              {isAlerting && <Zap size={8} className="text-blue-400 animate-pulse" />}
+                          </div>
+                      </div>
+                    );
+                })}
+            </div>
           </div>
+
+          {/* Signals List */}
+          <div className="space-y-6">
+            {sortedSignals.map((signal) => (
+              <SignalCard 
+                key={signal.id} 
+                signal={signal} 
+                user={user} 
+                highlights={granularHighlights[signal.id]} 
+                isMajorAlerting={!!activeMajorAlerts[signal.id]}
+                onSignalUpdate={onSignalUpdate}
+                isRecentlyClosed={signal.status === TradeStatus.EXITED || signal.status === TradeStatus.STOPPED || signal.status === TradeStatus.ALL_TARGET}
+              />
+            ))}
+          </div>
+
+          <div className="lg:hidden mt-8">
+            <HotlineCard 
+              text={hotlineText} 
+              onTextChange={setHotlineText} 
+              onSend={handleHotlineSend} 
+              isSending={isSending} 
+              showSuccess={showSuccess} 
+            />
+          </div>
+        </div>
+
+        <div className="hidden lg:block space-y-6">
+          <div className="bg-blue-600/10 border border-blue-500/20 rounded-2xl p-5 shadow-xl">
+             <div className="flex items-center space-x-3 mb-3">
+                <Zap size={18} className="text-blue-500" />
+                <h4 className="text-xs font-black text-white uppercase tracking-widest">Market Status</h4>
+             </div>
+             <p className="text-[10px] text-slate-400 leading-relaxed font-medium uppercase tracking-tighter italic">
+                Secure link established. Spot prices and institutional flows are syncing in real-time. Alerts will trigger on major level shifts.
+             </p>
+          </div>
+
+          <HotlineCard 
+            text={hotlineText} 
+            onTextChange={setHotlineText} 
+            onSend={handleHotlineSend} 
+            isSending={isSending} 
+            showSuccess={showSuccess} 
+          />
+        </div>
       </div>
     </div>
   );
 };
+
+const HotlineCard = ({ text, onTextChange, onSend, isSending, showSuccess }: any) => (
+  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl relative overflow-hidden group">
+    <div className="absolute top-0 right-0 p-3 opacity-5">
+      <Send size={48} className="text-blue-500" />
+    </div>
+    
+    <div className="relative z-10">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center space-x-2">
+          <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></div>
+          <h4 className="text-[10px] font-black text-white uppercase tracking-widest">Terminal Hotline</h4>
+        </div>
+        <div className="px-2 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-[8px] font-black text-blue-500 uppercase tracking-tighter">
+          Secure Channel
+        </div>
+      </div>
+
+      <textarea 
+        value={text}
+        onChange={(e) => onTextChange(e.target.value)}
+        placeholder="Send trade query or feedback to admin..."
+        className="w-full h-24 bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-300 focus:border-blue-500 outline-none transition-all placeholder:text-slate-700 resize-none mb-3"
+      />
+
+      <button 
+        onClick={onSend}
+        disabled={isSending || !text.trim()}
+        className={`w-full py-2.5 rounded-xl flex items-center justify-center text-[10px] font-black uppercase tracking-widest transition-all ${
+          showSuccess ? 'bg-emerald-600 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/40 disabled:opacity-50'
+        }`}
+      >
+        {isSending ? (
+          <Loader2 size={14} className="animate-spin mr-2" />
+        ) : showSuccess ? (
+          <CheckCircle2 size={14} className="mr-2" />
+        ) : (
+          <Send size={14} className="mr-2" />
+        )}
+        {isSending ? 'Transmitting...' : showSuccess ? 'Sent Successfully' : 'Send to Terminal'}
+      </button>
+
+      <p className="mt-3 text-[8px] text-slate-600 font-bold text-center uppercase tracking-tighter">
+        Admin usually responds via Intelligence Broadcast
+      </p>
+    </div>
+  </div>
+);
 
 export default Dashboard;

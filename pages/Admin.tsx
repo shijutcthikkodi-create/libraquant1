@@ -1,11 +1,12 @@
+
 import React, { useState, useMemo } from 'react';
-import { WatchlistItem, TradeSignal, OptionType, TradeStatus, User, LogEntry } from '../types';
+import { WatchlistItem, TradeSignal, OptionType, TradeStatus, User, LogEntry, ChatMessage } from '../types';
 import { 
-  Trash2, Edit2, Radio, UserCheck, RefreshCw, Smartphone, Search, 
-  History, Zap, Loader2, AlertTriangle, Clock, ShieldCheck, Activity, 
-  Terminal, Download, LogIn, Users, Monitor, Plus, Target, TrendingUp,
-  ArrowUpCircle, ArrowDownCircle, ShieldAlert, Briefcase, ChevronRight, X, Database,
-  UserPlus, UserMinus, Key, Shield, User as UserIcon, Calendar, CheckCircle2, Eye, EyeOff
+  Trash2, Edit2, Radio, UserCheck, RefreshCw, Search, 
+  History, Zap, Loader2, Database,
+  Plus, ArrowUpCircle, ArrowDownCircle, X, Database as DatabaseIcon,
+  UserPlus, Shield, User as UserIcon, CheckCircle2, Eye, EyeOff,
+  Key, TrendingUp, Send, MessageSquareCode, Radio as RadioIcon
 } from 'lucide-react';
 import { updateSheetData } from '../services/googleSheetsService';
 
@@ -17,15 +18,19 @@ interface AdminProps {
   users: User[];
   onUpdateUsers: (list: User[]) => void;
   logs?: LogEntry[];
+  messages: ChatMessage[];
   onNavigate: (page: string) => void;
   onHardSync?: () => Promise<void>;
 }
 
-const Admin: React.FC<AdminProps> = ({ signals, users, logs = [], onHardSync }) => {
-  const [activeTab, setActiveTab] = useState<'SIGNALS' | 'CLIENTS' | 'LOGS'>('SIGNALS');
+const Admin: React.FC<AdminProps> = ({ signals = [], users = [], logs = [], messages = [], onHardSync }) => {
+  const [activeTab, setActiveTab] = useState<'SIGNALS' | 'CLIENTS' | 'BROADCAST' | 'LOGS'>('SIGNALS');
   const [isSaving, setIsSaving] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [logFilter, setLogFilter] = useState<'ALL' | 'SECURITY' | 'TRADE' | 'SYSTEM' | 'USER'>('ALL');
+
+  // Broadcast State
+  const [intelText, setIntelText] = useState('');
 
   // Edit User Modal State
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -52,8 +57,12 @@ const Admin: React.FC<AdminProps> = ({ signals, users, logs = [], onHardSync }) 
     return (signals || []).filter(s => s.status === TradeStatus.ACTIVE || s.status === TradeStatus.PARTIAL);
   }, [signals]);
 
+  const adminMessages = useMemo(() => {
+    return (messages || []).filter(m => m.isAdminReply).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }, [messages]);
+
   const filteredUsers = useMemo(() => {
-    let list = [...users];
+    let list = [...(users || [])];
     if (searchQuery && activeTab === 'CLIENTS') {
       const q = searchQuery.toLowerCase();
       list = list.filter(u => 
@@ -67,8 +76,8 @@ const Admin: React.FC<AdminProps> = ({ signals, users, logs = [], onHardSync }) 
 
   const filteredLogs = useMemo(() => {
     let list = logFilter === 'ALL' 
-      ? [...logs] 
-      : logs.filter(l => l.type === logFilter);
+      ? [...(logs || [])] 
+      : (logs || []).filter(l => l.type === logFilter);
       
     if (searchQuery && activeTab === 'LOGS') {
       const q = searchQuery.toLowerCase();
@@ -172,6 +181,31 @@ const Admin: React.FC<AdminProps> = ({ signals, users, logs = [], onHardSync }) 
     setIsSaving(false);
   };
 
+  const handlePostIntel = async () => {
+    if (!intelText.trim()) return;
+    setIsSaving(true);
+    const newBroadcast: Partial<ChatMessage> = {
+      text: intelText.trim(),
+      timestamp: new Date().toISOString(),
+      isAdminReply: true,
+      senderName: 'TERMINAL ADMIN',
+      userId: 'ADMIN'
+    };
+    const success = await updateSheetData('messages', 'ADD', newBroadcast);
+    if (success) {
+      await updateSheetData('logs', 'ADD', {
+        timestamp: new Date().toISOString(),
+        user: 'ADMIN',
+        action: 'INTEL_BROADCAST',
+        details: `Global broadcast posted.`,
+        type: 'SYSTEM'
+      });
+      setIntelText('');
+      if (onHardSync) onHardSync();
+    }
+    setIsSaving(false);
+  };
+
   const triggerQuickUpdate = async (signal: TradeSignal, updates: Partial<TradeSignal>, actionLabel: string) => {
     setIsSaving(true);
     const payload = { ...signal, ...updates, lastTradedTimestamp: new Date().toISOString() };
@@ -208,13 +242,14 @@ const Admin: React.FC<AdminProps> = ({ signals, users, logs = [], onHardSync }) 
         <div className="flex bg-slate-900 rounded-xl p-1 border border-slate-800 mt-4 md:mt-0 shadow-lg overflow-x-auto">
             {[
               { id: 'SIGNALS', icon: Radio, label: 'Signals' },
-              { id: 'CLIENTS', icon: UserCheck, label: 'Subscribers' },
+              { id: 'BROADCAST', icon: RadioIcon, label: 'Market Intelligence' },
+              { id: 'CLIENTS', icon: UserIcon, label: 'Subscribers' },
               { id: 'LOGS', icon: History, label: 'Audit Trail' }
             ].map((tab) => (
               <button 
                   key={tab.id}
                   onClick={() => { setActiveTab(tab.id as any); setSearchQuery(''); }}
-                  className={`flex items-center px-4 py-2 rounded-lg text-xs font-bold transition-all ${activeTab === tab.id ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
+                  className={`flex items-center px-4 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${activeTab === tab.id ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
               >
                   <tab.icon size={14} className="mr-2" />
                   {tab.label}
@@ -234,7 +269,7 @@ const Admin: React.FC<AdminProps> = ({ signals, users, logs = [], onHardSync }) 
                     {!isAddingSignal && (
                       <div className="flex space-x-2">
                         <button onClick={onHardSync} className="flex items-center px-4 py-2 rounded-lg bg-slate-800 text-blue-400 border border-blue-500/20 text-xs font-bold hover:bg-blue-500/10 transition-all">
-                           <Database size={14} className="mr-2" />
+                           <DatabaseIcon size={14} className="mr-2" />
                            Hard Sync
                         </button>
                         <button onClick={() => setIsAddingSignal(true)} className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-colors shadow-lg shadow-blue-900/40 uppercase tracking-widest">
@@ -370,6 +405,62 @@ const Admin: React.FC<AdminProps> = ({ signals, users, logs = [], onHardSync }) 
         </div>
       )}
 
+      {activeTab === 'BROADCAST' && (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl p-6">
+                <div className="flex items-center space-x-3 mb-6">
+                    <MessageSquareCode className="text-blue-500" size={24} />
+                    <h3 className="text-lg font-bold text-white uppercase tracking-tighter">Institutional Broadcast Feed</h3>
+                </div>
+                
+                <div className="space-y-4">
+                    <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest">Post Market Intelligence (Morning Posts, View Updates, Alerts)</p>
+                    <textarea 
+                        value={intelText}
+                        onChange={(e) => setIntelText(e.target.value)}
+                        placeholder="Type global broadcast message..."
+                        className="w-full h-32 bg-slate-950 border border-slate-800 rounded-2xl p-4 text-white text-sm focus:border-blue-500 outline-none font-medium leading-relaxed"
+                    />
+                    <div className="flex justify-end">
+                        <button 
+                            onClick={handlePostIntel}
+                            disabled={isSaving || !intelText.trim()}
+                            className="flex items-center px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg disabled:opacity-50 uppercase tracking-widest"
+                        >
+                            {isSaving ? <Loader2 size={16} className="animate-spin mr-2" /> : <Send size={16} className="mr-2" />}
+                            Post Intelligence
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
+                <div className="p-5 border-b border-slate-800 bg-slate-800/10">
+                    <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Previous Broadcasts</h3>
+                </div>
+                <div className="divide-y divide-slate-800">
+                    {adminMessages.map((msg) => (
+                        <div key={msg.id} className="p-4 hover:bg-slate-800/20 transition-colors">
+                            <div className="flex items-center justify-between mb-1">
+                                <span className="text-[9px] font-mono text-slate-600 uppercase font-bold">{new Date(msg.timestamp).toLocaleString()}</span>
+                                <div className="flex items-center space-x-1">
+                                   <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>
+                                   <span className="text-[8px] font-black text-blue-500 uppercase tracking-tighter">Live Intel</span>
+                                </div>
+                            </div>
+                            <p className="text-sm text-slate-300 font-medium leading-relaxed">{msg.text}</p>
+                        </div>
+                    ))}
+                    {adminMessages.length === 0 && (
+                        <div className="p-10 text-center">
+                            <p className="text-[10px] text-slate-600 font-black uppercase tracking-widest">No previous intel broadcasts</p>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+      )}
+
       {activeTab === 'CLIENTS' && (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
             <div className="flex items-center justify-between gap-4">
@@ -384,7 +475,7 @@ const Admin: React.FC<AdminProps> = ({ signals, users, logs = [], onHardSync }) 
                 />
               </div>
               <div className="px-4 py-2 bg-slate-900 border border-slate-800 rounded-2xl flex items-center space-x-2">
-                <Users size={16} className="text-blue-500" />
+                <UserIcon size={16} className="text-blue-500" />
                 <span className="text-xs font-bold text-white">{filteredUsers.length} Subscribers</span>
               </div>
             </div>

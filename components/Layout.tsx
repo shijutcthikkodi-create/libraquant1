@@ -12,6 +12,46 @@ interface LayoutProps {
   onNavigate: (page: string) => void;
 }
 
+const Watermark = ({ user }: { user: User }) => {
+  const watermarkText = useMemo(() => {
+    const safeId = (user.id || '').toUpperCase();
+    const safePhone = user.phoneNumber || '';
+    const safeName = (user.name || '').toUpperCase();
+    // Format: ID PHONE_NUMBER NAME
+    return `${safeId} ${safePhone} ${safeName}`.trim();
+  }, [user]);
+
+  // Create an SVG as a background image for tiling
+  const svgDataUrl = useMemo(() => {
+    // Increased tile size (600x400) and font size (28) for high visibility
+    const svg = `
+      <svg width="600" height="400" xmlns="http://www.w3.org/2000/svg">
+        <text 
+          x="50%" 
+          y="50%" 
+          font-family="JetBrains Mono, monospace" 
+          font-size="28" 
+          font-weight="900" 
+          fill="white" 
+          fill-opacity="0.1" 
+          text-anchor="middle" 
+          transform="rotate(-25, 300, 200)"
+        >
+          ${watermarkText}
+        </text>
+      </svg>
+    `;
+    return `url("data:image/svg+xml;base64,${btoa(svg)}")`;
+  }, [watermarkText]);
+
+  return (
+    <div 
+      className="fixed inset-0 pointer-events-none z-[1000]" 
+      style={{ backgroundImage: svgDataUrl, backgroundRepeat: 'repeat' }}
+    />
+  );
+};
+
 const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, currentPage, onNavigate }) => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isTabFocused, setIsTabFocused] = useState(true);
@@ -135,6 +175,9 @@ const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, currentPage, 
           <p className="text-slate-400 max-w-xs text-sm">Application content is hidden for your security while the tab is inactive.</p>
         </div>
       )}
+
+      {/* Watermark Overlay */}
+      {user && <Watermark user={user} />}
 
       {/* Mobile Header */}
       <div className="md:hidden bg-slate-900 border-b border-slate-800 p-4 flex justify-between items-center z-50 sticky top-0 shadow-xl flex-shrink-0">
